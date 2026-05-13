@@ -86,6 +86,9 @@ dependencies {
     // Security - EncryptedSharedPreferences
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
+    // DocumentFile for SAF
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    
     // ML Kit OCR
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")

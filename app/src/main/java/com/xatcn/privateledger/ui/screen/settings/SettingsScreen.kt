@@ -19,30 +19,59 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xatcn.privateledger.service.BackupService
 import com.xatcn.privateledger.ui.theme.KleinBlue
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onNavigateToModelManagement: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val backupService = remember { BackupService.getInstance(context) }
+    val scope = rememberCoroutineScope()
     var isDarkMode by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
     
-    // 文件选择器
-    val importLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
+    // SAF 目录选择器
+    val directoryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
         uri?.let {
-            // TODO: 导入数据
+            scope.launch {
+                val result = backupService.exportToSaf(it)
+                result.fold(
+                    onSuccess = { message ->
+                        statusMessage = message
+                    },
+                    onFailure = { e ->
+                        statusMessage = "导出失败：${e.message}"
+                    }
+                )
+            }
         }
     }
     
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
-    ) { uri: Uri? ->
+    // 文件选择器
+    val fileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
         uri?.let {
-            // TODO: 导出数据
+            scope.launch {
+                val result = backupService.importFromSaf(it)
+                result.fold(
+                    onSuccess = { message ->
+                        statusMessage = message
+                    },
+                    onFailure = { e ->
+                        statusMessage = "导入失败：${e.message}"
+                    }
+                )
+            }
         }
     }
     
@@ -94,8 +123,8 @@ fun SettingsScreen(
                     SettingsItem(
                         icon = Icons.Default.SmartToy,
                         title = "AI 模型",
-                        subtitle = "导入本地 AI 模型文件",
-                        onClick = { /* TODO */ }
+                        subtitle = "导入和管理本地 AI 模型文件",
+                        onClick = onNavigateToModelManagement
                     )
                 }
             }
@@ -107,15 +136,54 @@ fun SettingsScreen(
                         icon = Icons.Default.FileUpload,
                         title = "导入数据",
                         subtitle = "从 JSON 文件导入账单",
-                        onClick = { importLauncher.launch("application/json") }
+                        onClick = { fileLauncher.launch("application/json") }
                     )
                     
                     SettingsItem(
                         icon = Icons.Default.FileDownload,
                         title = "导出数据",
-                        subtitle = "导出账单为 JSON 文件",
-                        onClick = { exportLauncher.launch("private_ledger_backup.json") }
+                        subtitle = "导出账单到 SAF 目录",
+                        onClick = { directoryLauncher.launch(null) }
                     )
+                    
+                    SettingsItem(
+                        icon = Icons.Default.Backup,
+                        title = "自动备份",
+                        subtitle = "备份到 Documents 目录",
+                        onClick = {
+                            scope.launch {
+                                val result = backupService.autoBackup()
+                                result.fold(
+                                    onSuccess = { message ->
+                                        statusMessage = message
+                                    },
+                                    onFailure = { e ->
+                                        statusMessage = "备份失败：${e.message}"
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }
+            }
+            
+            // 状态消息
+            statusMessage?.let { message ->
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (message.contains("成功")) 
+                                MaterialTheme.colorScheme.primaryContainer
+                            else 
+                                MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Text(
+                            text = message,
+                            modifier = Modifier.padding(16.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
             }
             

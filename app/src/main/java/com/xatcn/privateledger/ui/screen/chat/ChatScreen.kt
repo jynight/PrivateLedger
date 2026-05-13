@@ -1,6 +1,7 @@
 package com.xatcn.privateledger.ui.screen.chat
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,10 +29,14 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.xatcn.privateledger.data.model.AIAnalysisResult
 import com.xatcn.privateledger.data.model.TransactionType
+import com.xatcn.privateledger.service.AIService
 import com.xatcn.privateledger.ui.theme.*
 import com.xatcn.privateledger.ui.component.GlassmorphismCard
 import com.xatcn.privateledger.ui.component.LoadingIndicator
 import com.xatcn.privateledger.util.AIHelper
+import com.xatcn.privateledger.util.SpeechHelper
+import com.xatcn.privateledger.util.SpeechState
+import kotlinx.coroutines.launch
 
 sealed class ChatMessage {
     data class UserMessage(val text: String) : ChatMessage()
@@ -46,10 +51,32 @@ fun ChatScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val aiService = remember { AIService.getInstance(context) }
+    val speechHelper = remember { SpeechHelper(context) }
+    val scope = rememberCoroutineScope()
+    
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    
+    // 监听语音识别状态
+    val speechState by speechHelper.state.collectAsState()
+    
+    // 语音识别结果处理
+    LaunchedEffect(speechState) {
+        when (val state = speechState) {
+            is SpeechState.Success -> {
+                inputText = state.text
+                speechHelper.reset()
+            }
+            is SpeechState.Error -> {
+                messages = messages + ChatMessage.SystemMessage("❌ 语音识别失败：${state.message}")
+                speechHelper.reset()
+            }
+            else -> {}
+        }
+    }
     
     // 语音识别
     val speechLauncher = rememberLauncherForActivityResult(
@@ -68,6 +95,12 @@ fun ChatScreen(
     ) { isGranted ->
         if (isGranted) {
             // 启动语音识别
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "请说出您的消费或收入信息")
+            }
+            speechLauncher.launch(intent)
         }
     }
     
@@ -88,7 +121,7 @@ fun ChatScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "输入消费或收入信息",
+                            text = if (aiService.hasModel()) "AI 模式" else "规则模式",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.8f)
                         )
@@ -125,7 +158,7 @@ fun ChatScreen(
                 // 欢迎消息
                 if (messages.isEmpty()) {
                     item {
-                        WelcomeMessage()
+                        WelcomeMessage(hasModel = aiService.hasModel())
                     }
                 }
                 
@@ -140,7 +173,6 @@ fun ChatScreen(
                             is ChatMessage.ConfirmationCard -> ConfirmationCardView(
                                 result = message.result,
                                 onConfirm = {
-                                    // TODO: 保存交易
                                     messages = messages + ChatMessage.SystemMessage("✅ 已记录")
                                     messages = messages + ChatMessage.AIMessage("已为您记录这笔${if (message.result.type == TransactionType.INCOME) "收入" else "支出"}！")
                                 },
@@ -177,16 +209,34 @@ fun ChatScreen(
                         messages = messages + ChatMessage.UserMessage(userText)
                         isLoading = true
                         
-                        // TODO: 调用 AI 解析
-                        // 模拟 AI 响应
-                        messages = messages + ChatMessage.AIMessage("正在分析您的输入...")
-                        isLoading = false
+                        // 调用 AI 解析
+                        scope.launch {
+                            messages = messages + ChatMessage.AIMessage("正在分析您的输入...")
+                            
+                            val result = aiService.analyzeTransaction(userText)
+                            result.fold(
+                                onSuccess = { analysisResult ->
+                                    // 移除"正在分析"消息
+                                    messages = messages.dropLast(1)
+                                    // 添加确认卡片
+                                    messages = messages + ChatMessage.ConfirmationCard(analysisResult)
+                                },
+                                onFailure = { e ->
+                                    // 移除"正在分析"消息
+                                    messages = messages.dropLast(1)
+                                    messages = messages + ChatMessage.AIMessage("抱歉，无法解析您的输入：${e.message}")
+                                    messages = messages + ChatMessage.AIMessage("请尝试更清晰的描述，例如：\n• 今天午饭花了25块\n• 收到工资8000元")
+                                }
+                            )
+                            isLoading = false
+                        }
                     }
                 },
                 onVoiceClick = {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) 
                         == PackageManager.PERMISSION_GRANTED) {
-                        // 启动语音识别
+                        // 使用 SpeechHelper 启动语音识别
+                        speechHelper.startListening()
                     } else {
                         permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
@@ -200,7 +250,7 @@ fun ChatScreen(
 }
 
 @Composable
-private fun WelcomeMessage() {
+private fun WelcomeMessage(hasModel: Boolean) {
     GlassmorphismCard(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -215,6 +265,12 @@ private fun WelcomeMessage() {
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (hasModel) "当前已加载 AI 模型，可以智能分析您的记账信息" 
+                   else "当前使用规则解析模式，您也可以导入 AI 模型获得更好的体验",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "你可以直接告诉我你的消费或收入情况，比如：",
             style = MaterialTheme.typography.bodyMedium
