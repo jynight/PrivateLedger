@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 克莱因蓝主题色 -->
+    <color name="klein_blue">#FF002FA7</color>
+    <color name="klein_blue_light">#FF4D6FB5</color>
+    <color name="klein_blue_dark">#FF001F75</color>
+    
+    <!-- 表面色 -->
+    <color name="surface_light">#FFF5F5F5</color>
+    <color name="surface_dark">#FF1C1C1E</color>
+    
+    <!-- 背景色 -->
+    <color name="background_light">#FFFFFFFF</color>
+    <color name="background_dark">#FF000000</color>
+    
+    <!-- 文字色 -->
+    <color name="text_primary_light">#FF1C1C1E</color>
+    <color name="text_primary_dark">#FFFFFFFF</color>
+    <color name="text_secondary_light">#FF8E8E93</color>
+    <color name="text_secondary_dark">#FF8E8E93</color>
+    
+    <!-- 收入/支出 -->
+    <color name="income_green">#FF34C759</color>
+    <color name="expense_red">#FFFF3B30</color>
+</resources>

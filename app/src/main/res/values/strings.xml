@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">私密记账</string>
+    <string name="accessibility_service_description">用于自动抓取支付成功页面的记账信息</string>
+</resources>
