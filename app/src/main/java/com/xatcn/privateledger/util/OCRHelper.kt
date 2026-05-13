@@ -11,7 +11,10 @@ import kotlin.coroutines.resumeWithException
 
 object OCRHelper {
     
-    private val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    // 懒加载 recognizer，避免在单元测试中初始化
+    private val recognizer by lazy {
+        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    }
     
     // 从 Uri 识别文字
     suspend fun recognizeText(context: Context, imageUri: Uri): String {
@@ -31,7 +34,7 @@ object OCRHelper {
         }
     }
     
-    // 从文字中提取金额
+    // 从文字中提取金额（纯逻辑，不依赖 ML Kit）
     fun extractAmount(text: String): Double? {
         // 匹配常见金额格式
         val patterns = listOf(
@@ -55,7 +58,7 @@ object OCRHelper {
         return null
     }
     
-    // 从文字中提取商户名
+    // 从文字中提取商户名（纯逻辑，不依赖 ML Kit）
     fun extractMerchant(text: String): String? {
         val patterns = listOf(
             Regex("""商户[：:]\s*(.+)"""),
