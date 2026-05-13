@@ -10,22 +10,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.xatcn.privateledger.PrivateLedgerApp
+import com.xatcn.privateledger.data.model.User
 import com.xatcn.privateledger.ui.theme.KleinBlue
 import com.xatcn.privateledger.ui.theme.KleinBlueLight
+import kotlinx.coroutines.launch
 
 @Composable
 fun RegisterScreen(
     onNavigateToLogin: () -> Unit,
     onRegisterSuccess: () -> Unit
 ) {
+    val context = LocalContext.current
+    val app = context.applicationContext as PrivateLedgerApp
+    val securityRepo = app.securityRepository
+    val userRepo = app.userRepository
+    val scope = rememberCoroutineScope()
+
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    
+    var isLoading by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -47,30 +58,31 @@ fun RegisterScreen(
                 text = "💰",
                 style = MaterialTheme.typography.displayLarge
             )
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             Text(
                 text = "创建账号",
                 style = MaterialTheme.typography.headlineLarge,
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
-            
+
             Text(
                 text = "设置您的私密记账账号",
                 style = MaterialTheme.typography.bodyLarge,
                 color = Color.White.copy(alpha = 0.8f)
             )
-            
+
             Spacer(modifier = Modifier.height(48.dp))
-            
+
             // 输入框
             OutlinedTextField(
                 value = username,
                 onValueChange = { username = it },
                 label = { Text("用户名") },
                 modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.White,
                     unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
@@ -81,15 +93,16 @@ fun RegisterScreen(
                     unfocusedTextColor = Color.White
                 )
             )
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
                 label = { Text("密码") },
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.White,
                     unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
@@ -100,15 +113,16 @@ fun RegisterScreen(
                     unfocusedTextColor = Color.White
                 )
             )
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             OutlinedTextField(
                 value = confirmPassword,
                 onValueChange = { confirmPassword = it },
                 label = { Text("确认密码") },
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color.White,
                     unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
@@ -119,49 +133,81 @@ fun RegisterScreen(
                     unfocusedTextColor = Color.White
                 )
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // 错误信息
             AnimatedVisibility(visible = errorMessage != null) {
                 Text(
                     text = errorMessage ?: "",
-                    color = MaterialTheme.colorScheme.error,
+                    color = Color(0xFFFF6B6B),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(24.dp))
-            
+
             // 注册按钮
             Button(
                 onClick = {
                     when {
                         username.isBlank() -> errorMessage = "请输入用户名"
+                        username.length < 2 -> errorMessage = "用户名至少2个字符"
                         password.length < 6 -> errorMessage = "密码至少6位"
                         password != confirmPassword -> errorMessage = "两次密码不一致"
                         else -> {
-                            // TODO: 保存用户信息
-                            onRegisterSuccess()
+                            isLoading = true
+                            errorMessage = null
+                            scope.launch {
+                                try {
+                                    // 保存用户名和密码哈希到加密存储
+                                    securityRepo.saveUsername(username)
+                                    securityRepo.savePasswordHash(password)
+
+                                    // 保存用户信息到数据库
+                                    val user = User(
+                                        id = 1,
+                                        username = username,
+                                        passwordHash = "stored_in_keystore",
+                                        nickname = username
+                                    )
+                                    userRepo.insertUser(user)
+
+                                    onRegisterSuccess()
+                                } catch (e: Exception) {
+                                    errorMessage = "注册失败：${e.message}"
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
                         }
                     }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),
+                enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text(
-                    text = "注册",
-                    color = KleinBlue,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleMedium
-                )
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = KleinBlue,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text(
+                        text = "注册",
+                        color = KleinBlue,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
             }
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             // 登录链接
             TextButton(onClick = onNavigateToLogin) {
                 Text(

@@ -15,22 +15,99 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xatcn.privateledger.PrivateLedgerApp
+import com.xatcn.privateledger.data.model.TransactionType
 import com.xatcn.privateledger.ui.theme.*
 import com.xatcn.privateledger.ui.component.GlassmorphismCard
 import com.xatcn.privateledger.util.DateUtils
 import java.time.LocalDateTime
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalAdjusters
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen(
     onNavigateBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val app = context.applicationContext as PrivateLedgerApp
+    val transactionRepo = app.transactionRepository
+
+    val allTransactions by transactionRepo.getAllTransactions().collectAsState(initial = emptyList())
     var selectedPeriod by remember { mutableStateOf("month") }
-    var totalIncome by remember { mutableDoubleStateOf(0.0) }
-    var totalExpense by remember { mutableDoubleStateOf(0.0) }
-    
+
+    // 根据选择的时间段过滤
+    val now = LocalDate.now()
+    val filteredTransactions = remember(allTransactions, selectedPeriod) {
+        val activeTransactions = allTransactions.filter { !it.isReversed }
+        when (selectedPeriod) {
+            "week" -> {
+                val weekStart = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                activeTransactions.filter {
+                    val dateStr = it.date.substringBefore("T").take(10)
+                    val date = try { LocalDate.parse(dateStr) } catch (e: Exception) { return@filter false }
+                    !date.isBefore(weekStart) && !date.isAfter(now)
+                }
+            }
+            "month" -> {
+                val monthStart = now.withDayOfMonth(1)
+                activeTransactions.filter {
+                    val dateStr = it.date.substringBefore("T").take(10)
+                    val date = try { LocalDate.parse(dateStr) } catch (e: Exception) { return@filter false }
+                    !date.isBefore(monthStart) && !date.isAfter(now)
+                }
+            }
+            "year" -> {
+                val yearStart = now.withDayOfYear(1)
+                activeTransactions.filter {
+                    val dateStr = it.date.substringBefore("T").take(10)
+                    val date = try { LocalDate.parse(dateStr) } catch (e: Exception) { return@filter false }
+                    !date.isBefore(yearStart) && !date.isAfter(now)
+                }
+            }
+            else -> activeTransactions
+        }
+    }
+
+    val totalIncome = filteredTransactions
+        .filter { it.type == TransactionType.INCOME }
+        .sumOf { it.amount }
+    val totalExpense = filteredTransactions
+        .filter { it.type == TransactionType.EXPENSE }
+        .sumOf { it.amount }
+
+    // 类别统计
+    val categoryStats = filteredTransactions
+        .filter { it.type == TransactionType.EXPENSE }
+        .groupBy { it.category }
+        .map { (category, transactions) ->
+            Triple(category, transactions.sumOf { it.amount }, transactions.size)
+        }
+        .sortedByDescending { it.second }
+
+    // 最大支出 Top 5
+    val topExpenses = filteredTransactions
+        .filter { it.type == TransactionType.EXPENSE }
+        .sortedByDescending { it.amount }
+        .take(5)
+
+    // 最近7天消费趋势
+    val last7Days = (0..6).map { now.minusDays(it.toLong()) }.reversed()
+    val dailyExpenses = last7Days.map { day ->
+        filteredTransactions
+            .filter {
+                it.type == TransactionType.EXPENSE && it.date.startsWith(day.toString())
+            }
+            .sumOf { it.amount }
+            .toFloat()
+    }
+    val dayLabels = last7Days.map { "${it.monthValue}/${it.dayOfMonth}" }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -68,7 +145,7 @@ fun StatsScreen(
                     onSelect = { selectedPeriod = it }
                 )
             }
-            
+
             // 概览卡片
             item {
                 StatsOverviewCard(
@@ -76,20 +153,26 @@ fun StatsScreen(
                     totalExpense = totalExpense
                 )
             }
-            
+
             // 趋势图
             item {
-                TrendChart()
+                TrendChart(
+                    data = dailyExpenses,
+                    labels = dayLabels
+                )
             }
-            
+
             // 类别占比
             item {
-                CategoryBreakdown()
+                CategoryBreakdown(
+                    categories = categoryStats,
+                    totalExpense = totalExpense
+                )
             }
-            
+
             // 最大支出
             item {
-                TopExpenses()
+                TopExpenses(expenses = topExpenses)
             }
         }
     }
@@ -135,9 +218,9 @@ private fun StatsOverviewCard(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -155,7 +238,7 @@ private fun StatsOverviewCard(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "结余",
@@ -169,7 +252,7 @@ private fun StatsOverviewCard(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     text = "总支出",
@@ -188,7 +271,10 @@ private fun StatsOverviewCard(
 }
 
 @Composable
-private fun TrendChart() {
+private fun TrendChart(
+    data: List<Float>,
+    labels: List<String>
+) {
     GlassmorphismCard(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -197,20 +283,30 @@ private fun TrendChart() {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
-        // 示例数据
-        val data = listOf(150f, 230f, 180f, 320f, 280f, 190f, 260f)
-        val labels = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-        
-        SimpleLineChart(
-            data = data,
-            labels = labels,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-        )
+
+        if (data.all { it == 0f }) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "暂无数据",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            SimpleLineChart(
+                data = data,
+                labels = labels,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+            )
+        }
     }
 }
 
@@ -220,8 +316,8 @@ private fun SimpleLineChart(
     labels: List<String>,
     modifier: Modifier = Modifier
 ) {
-    val maxValue = data.maxOrNull() ?: 1f
-    
+    val maxValue = (data.maxOrNull() ?: 1f).coerceAtLeast(1f)
+
     Column(modifier = modifier) {
         Canvas(
             modifier = Modifier
@@ -230,8 +326,8 @@ private fun SimpleLineChart(
         ) {
             val width = size.width
             val height = size.height
-            val stepX = width / (data.size - 1)
-            
+            val stepX = width / (data.size - 1).coerceAtLeast(1)
+
             // 绘制网格线
             for (i in 0..4) {
                 val y = height * i / 4
@@ -242,7 +338,7 @@ private fun SimpleLineChart(
                     strokeWidth = 1f
                 )
             }
-            
+
             // 绘制折线
             val path = Path()
             data.forEachIndexed { index, value ->
@@ -254,13 +350,13 @@ private fun SimpleLineChart(
                     path.lineTo(x, y)
                 }
             }
-            
+
             drawPath(
                 path = path,
                 color = KleinBlue,
                 style = Stroke(width = 3f)
             )
-            
+
             // 绘制数据点
             data.forEachIndexed { index, value ->
                 val x = index * stepX
@@ -272,7 +368,7 @@ private fun SimpleLineChart(
                 )
             }
         }
-        
+
         // 标签
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -290,7 +386,20 @@ private fun SimpleLineChart(
 }
 
 @Composable
-private fun CategoryBreakdown() {
+private fun CategoryBreakdown(
+    categories: List<Triple<String, Double, Int>>,
+    totalExpense: Double
+) {
+    val colors = listOf(
+        ExpenseRed,
+        Color(0xFFFF9500),
+        Color(0xFF5856D6),
+        Color(0xFF34C759),
+        Color(0xFF8E8E93),
+        Color(0xFF007AFF),
+        Color(0xFFFF2D55)
+    )
+
     GlassmorphismCard(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -299,51 +408,67 @@ private fun CategoryBreakdown() {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
-        // 示例数据
-        val categories = listOf(
-            Triple("餐饮", 35f, ExpenseRed),
-            Triple("交通", 20f, Color(0xFFFF9500)),
-            Triple("购物", 25f, Color(0xFF5856D6)),
-            Triple("娱乐", 15f, Color(0xFF34C759)),
-            Triple("其他", 5f, Color(0xFF8E8E93))
-        )
-        
-        categories.forEach { (name, percentage, color) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
+
+        if (categories.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
+                Text(
+                    text = "暂无数据",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            categories.forEachIndexed { index, (name, amount, count) ->
+                val percentage = if (totalExpense > 0) (amount / totalExpense * 100) else 0.0
+                val color = colors[index % colors.size]
+
+                Row(
                     modifier = Modifier
-                        .size(12.dp)
-                        .background(color, RoundedCornerShape(2.dp))
-                )
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f)
-                )
-                
-                Text(
-                    text = "${percentage.toInt()}%",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .background(color, RoundedCornerShape(2.dp))
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Text(
+                        text = "¥${String.format("%.0f", amount)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Text(
+                        text = "${String.format("%.1f", percentage)}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun TopExpenses() {
+private fun TopExpenses(
+    expenses: List<com.xatcn.privateledger.data.model.Transaction>
+) {
     GlassmorphismCard(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -352,42 +477,54 @@ private fun TopExpenses() {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
-        // 示例数据
-        val expenses = listOf(
-            Triple("房租", "¥2500.00", "05月01日"),
-            Triple("购物", "¥580.00", "05月05日"),
-            Triple("餐饮", "¥320.00", "05月08日")
-        )
-        
-        expenses.forEach { (category, amount, date) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+
+        if (expenses.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "暂无数据",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            expenses.forEach { transaction ->
+                val dateStr = try {
+                    val dt = LocalDateTime.parse(transaction.date)
+                    dt.format(DateTimeFormatter.ofPattern("MM月dd日"))
+                } catch (e: Exception) {
+                    transaction.date.take(10)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = transaction.category,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
                     Text(
-                        text = category,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = date,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "¥${String.format("%.2f", transaction.amount)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = ExpenseRed
                     )
                 }
-                
-                Text(
-                    text = amount,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = ExpenseRed
-                )
             }
         }
     }

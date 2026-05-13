@@ -18,14 +18,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xatcn.privateledger.PrivateLedgerApp
 import com.xatcn.privateledger.data.model.Transaction
 import com.xatcn.privateledger.data.model.TransactionType
 import com.xatcn.privateledger.ui.theme.*
 import com.xatcn.privateledger.ui.component.GlassmorphismCard
 import com.xatcn.privateledger.util.DateUtils
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,10 +37,28 @@ fun HomeScreen(
     onNavigateToStats: () -> Unit,
     onNavigateToSettings: () -> Unit
 ) {
-    var totalIncome by remember { mutableDoubleStateOf(0.0) }
-    var totalExpense by remember { mutableDoubleStateOf(0.0) }
-    var recentTransactions by remember { mutableStateOf(listOf<Transaction>()) }
-    
+    val context = LocalContext.current
+    val app = context.applicationContext as PrivateLedgerApp
+    val transactionRepo = app.transactionRepository
+
+    // 从数据库观察所有交易
+    val allTransactions by transactionRepo.getAllTransactions().collectAsState(initial = emptyList())
+
+    // 计算本月收支
+    val currentMonth = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM"))
+    val monthlyTransactions = allTransactions.filter { it.date.startsWith(currentMonth) && !it.isReversed }
+    val totalIncome = monthlyTransactions
+        .filter { it.type == TransactionType.INCOME }
+        .sumOf { it.amount }
+    val totalExpense = monthlyTransactions
+        .filter { it.type == TransactionType.EXPENSE }
+        .sumOf { it.amount }
+
+    // 最近5条交易
+    val recentTransactions = allTransactions
+        .filter { !it.isReversed }
+        .take(5)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -108,7 +129,7 @@ fun HomeScreen(
                     totalExpense = totalExpense
                 )
             }
-            
+
             // 快捷操作
             item {
                 QuickActions(
@@ -116,7 +137,7 @@ fun HomeScreen(
                     onStatsClick = onNavigateToStats
                 )
             }
-            
+
             // 最近交易
             item {
                 Text(
@@ -125,7 +146,7 @@ fun HomeScreen(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             if (recentTransactions.isEmpty()) {
                 item {
                     EmptyState()
@@ -152,9 +173,9 @@ private fun OverviewCard(
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -172,7 +193,7 @@ private fun OverviewCard(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Column {
                 Text(
                     text = "支出",
@@ -186,7 +207,7 @@ private fun OverviewCard(
                     fontWeight = FontWeight.Bold
                 )
             }
-            
+
             Column {
                 Text(
                     text = "结余",
@@ -290,26 +311,26 @@ private fun TransactionItem(transaction: Transaction) {
                     .size(40.dp)
                     .clip(CircleShape)
                     .background(
-                        if (transaction.type == TransactionType.INCOME) 
+                        if (transaction.type == TransactionType.INCOME)
                             IncomeGreen.copy(alpha = 0.1f)
-                        else 
+                        else
                             ExpenseRed.copy(alpha = 0.1f)
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (transaction.type == TransactionType.INCOME) 
-                        Icons.Default.TrendingUp 
-                    else 
+                    imageVector = if (transaction.type == TransactionType.INCOME)
+                        Icons.Default.TrendingUp
+                    else
                         Icons.Default.TrendingDown,
                     contentDescription = null,
                     tint = if (transaction.type == TransactionType.INCOME) IncomeGreen else ExpenseRed,
                     modifier = Modifier.size(20.dp)
                 )
             }
-            
+
             Spacer(modifier = Modifier.width(12.dp))
-            
+
             // 交易信息
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -324,8 +345,14 @@ private fun TransactionItem(transaction: Transaction) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                // 显示日期
+                Text(
+                    text = formatTransactionDate(transaction.date),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            
+
             // 金额
             Text(
                 text = "${if (transaction.type == TransactionType.INCOME) "+" else "-"}¥${String.format("%.2f", kotlin.math.abs(transaction.amount))}",
@@ -333,6 +360,20 @@ private fun TransactionItem(transaction: Transaction) {
                 fontWeight = FontWeight.Bold,
                 color = if (transaction.type == TransactionType.INCOME) IncomeGreen else ExpenseRed
             )
+        }
+    }
+}
+
+private fun formatTransactionDate(dateStr: String): String {
+    return try {
+        val dt = LocalDateTime.parse(dateStr)
+        dt.format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+    } catch (e: Exception) {
+        try {
+            // Try parsing with just date
+            dateStr.substringBefore("T").take(10)
+        } catch (e2: Exception) {
+            dateStr.take(16)
         }
     }
 }

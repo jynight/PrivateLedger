@@ -27,13 +27,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.xatcn.privateledger.PrivateLedgerApp
 import com.xatcn.privateledger.data.model.AIAnalysisResult
+import com.xatcn.privateledger.data.model.Transaction
+import com.xatcn.privateledger.data.model.TransactionSource
 import com.xatcn.privateledger.data.model.TransactionType
 import com.xatcn.privateledger.service.AIService
 import com.xatcn.privateledger.ui.theme.*
 import com.xatcn.privateledger.ui.component.GlassmorphismCard
 import com.xatcn.privateledger.ui.component.LoadingIndicator
-import com.xatcn.privateledger.util.AIHelper
 import com.xatcn.privateledger.util.SpeechHelper
 import com.xatcn.privateledger.util.SpeechState
 import kotlinx.coroutines.launch
@@ -51,18 +53,20 @@ fun ChatScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val app = context.applicationContext as PrivateLedgerApp
+    val transactionRepo = app.transactionRepository
     val aiService = remember { AIService.getInstance(context) }
     val speechHelper = remember { SpeechHelper(context) }
     val scope = rememberCoroutineScope()
-    
+
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    
+
     // 监听语音识别状态
     val speechState by speechHelper.state.collectAsState()
-    
+
     // 语音识别结果处理
     LaunchedEffect(speechState) {
         when (val state = speechState) {
@@ -77,7 +81,7 @@ fun ChatScreen(
             else -> {}
         }
     }
-    
+
     // 语音识别
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -88,13 +92,12 @@ fun ChatScreen(
             inputText = results[0]
         }
     }
-    
+
     // 权限请求
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            // 启动语音识别
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
@@ -103,14 +106,14 @@ fun ChatScreen(
             speechLauncher.launch(intent)
         }
     }
-    
+
     // 自动滚动到底部
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
-    
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -161,7 +164,7 @@ fun ChatScreen(
                         WelcomeMessage(hasModel = aiService.hasModel())
                     }
                 }
-                
+
                 items(messages) { message ->
                     AnimatedVisibility(
                         visible = true,
@@ -173,8 +176,27 @@ fun ChatScreen(
                             is ChatMessage.ConfirmationCard -> ConfirmationCardView(
                                 result = message.result,
                                 onConfirm = {
-                                    messages = messages + ChatMessage.SystemMessage("✅ 已记录")
-                                    messages = messages + ChatMessage.AIMessage("已为您记录这笔${if (message.result.type == TransactionType.INCOME) "收入" else "支出"}！")
+                                    // 真正插入数据库！
+                                    scope.launch {
+                                        try {
+                                            val transaction = Transaction(
+                                                amount = message.result.amount.toDouble(),
+                                                category = message.result.category,
+                                                type = message.result.type,
+                                                note = message.result.note,
+                                                source = TransactionSource.AI_CHAT
+                                            )
+                                            val id = transactionRepo.insertTransaction(transaction)
+                                            messages = messages + ChatMessage.SystemMessage("✅ 已记录 (ID: $id)")
+                                            messages = messages + ChatMessage.AIMessage(
+                                                "已为您记录这笔${if (message.result.type == TransactionType.INCOME) "收入" else "支出"}！\n" +
+                                                "金额：¥${String.format("%.2f", message.result.amount)}\n" +
+                                                "类别：${message.result.category}"
+                                            )
+                                        } catch (e: Exception) {
+                                            messages = messages + ChatMessage.SystemMessage("❌ 保存失败：${e.message}")
+                                        }
+                                    }
                                 },
                                 onCancel = {
                                     messages = messages + ChatMessage.SystemMessage("❌ 已取消")
@@ -184,7 +206,7 @@ fun ChatScreen(
                         }
                     }
                 }
-                
+
                 // 加载指示器
                 if (isLoading) {
                     item {
@@ -197,7 +219,7 @@ fun ChatScreen(
                     }
                 }
             }
-            
+
             // 输入栏
             ChatInputBar(
                 value = inputText,
@@ -208,11 +230,11 @@ fun ChatScreen(
                         inputText = ""
                         messages = messages + ChatMessage.UserMessage(userText)
                         isLoading = true
-                        
+
                         // 调用 AI 解析
                         scope.launch {
                             messages = messages + ChatMessage.AIMessage("正在分析您的输入...")
-                            
+
                             val result = aiService.analyzeTransaction(userText)
                             result.fold(
                                 onSuccess = { analysisResult ->
@@ -233,9 +255,8 @@ fun ChatScreen(
                     }
                 },
                 onVoiceClick = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) 
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                         == PackageManager.PERMISSION_GRANTED) {
-                        // 使用 SpeechHelper 启动语音识别
                         speechHelper.startListening()
                     } else {
                         permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -266,7 +287,7 @@ private fun WelcomeMessage(hasModel: Boolean) {
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (hasModel) "当前已加载 AI 模型，可以智能分析您的记账信息" 
+            text = if (hasModel) "当前已加载 AI 模型，可以智能分析您的记账信息"
                    else "当前使用规则解析模式，您也可以导入 AI 模型获得更好的体验",
             style = MaterialTheme.typography.bodyMedium
         )
@@ -325,9 +346,9 @@ private fun AIMessageBubble(text: String) {
         ) {
             Text(text = "🤖", style = MaterialTheme.typography.bodySmall)
         }
-        
+
         Spacer(modifier = Modifier.width(8.dp))
-        
+
         Box(
             modifier = Modifier
                 .widthIn(max = 280.dp)
@@ -357,9 +378,9 @@ private fun ConfirmationCardView(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold
         )
-        
+
         Spacer(modifier = Modifier.height(12.dp))
-        
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -376,7 +397,7 @@ private fun ConfirmationCardView(
                     fontWeight = FontWeight.Medium
                 )
             }
-            
+
             Column {
                 Text(
                     text = "金额",
@@ -390,7 +411,7 @@ private fun ConfirmationCardView(
                     color = if (result.type == TransactionType.INCOME) IncomeGreen else ExpenseRed
                 )
             }
-            
+
             Column {
                 Text(
                     text = "类别",
@@ -404,7 +425,7 @@ private fun ConfirmationCardView(
                 )
             }
         }
-        
+
         if (result.note.isNotBlank()) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -413,9 +434,9 @@ private fun ConfirmationCardView(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -426,7 +447,7 @@ private fun ConfirmationCardView(
             ) {
                 Text("取消")
             }
-            
+
             Button(
                 onClick = onConfirm,
                 modifier = Modifier.weight(1f),
@@ -478,7 +499,7 @@ private fun ChatInputBar(
                     tint = KleinBlue
                 )
             }
-            
+
             // 输入框
             OutlinedTextField(
                 value = value,
@@ -488,9 +509,9 @@ private fun ChatInputBar(
                 singleLine = true,
                 shape = RoundedCornerShape(24.dp)
             )
-            
+
             Spacer(modifier = Modifier.width(8.dp))
-            
+
             // 语音/发送按钮
             if (value.isBlank()) {
                 IconButton(
